@@ -1,9 +1,9 @@
 from __future__ import print_function
-import keras
-from keras.models import Sequential
-from keras import layers
-from keras.datasets import mnist
-from keras import backend as K
+import klapa
+from klapa.models import Sequential
+from klapa import layers
+from klapa.datasets import mnist
+from klapa import backend as K
 
 class Antirectifier(layers.Layer):
 	def compute_output_shape(self, input_shape):
