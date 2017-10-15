@@ -262,6 +262,277 @@ def shape(x):
 	"""
 	return tf.shape(x)
 
+def int_shape(x):
+	"""Returns the shape tensor or variable as a tuple of int or None entries
+	Example:
+	from klapa import backend as K
+	inputs = K.placeholder(shape=(2,4,5))
+	K.int_shape(inputs)
+	val = np.array([[1,2], [3 4]])
+	kvar = K.variable(value = val)
+	K.int_shape(kvar)
+	"""
+	if(hasattr(x, '_keras_shape')):
+		return x._keras_shape
+	try:
+		return tuple(x.get_shape().as_list())
+	except ValueError:
+		return None
+
+def ndim(x):
+	"""Return number of axes on the tensor
+	Example:
+	from klapa import backend as K
+	inputs = K.placeholder(shape=(2,4,5))
+	val = np.array([[1,2], [3,4]])
+	kvar = K.variable(value=val)
+	K.ndim(inputs)
+	K.ndim(kvar)
+	"""
+	dims = x.get_shape()._dims
+	if dims is not None:
+		return len(dims)
+	return None
+
+def dtype(x):
+	"""Return the dtype of a klapa tensor or variable as string
+
+	Example:
+	from klapa import backend as K
+	K.dtype(K.placeholder(shape=(2,4,5)))
+	"""
+	return x.dtype.base_dtype.name
+
+def eval(x):
+	"""Evaluate the value of the variable
+	Example:
+	from klapa import backend as K
+	kvar = K.variable(np.array([[1,2], [3,4], dtype='float32']))
+	K.eval(kvar)
+	"""
+	return to_dense(x).eval(session=get_session())
+
+def zeros(shape, dtype=None, name=None):
+	"""Instantiate all-zero variable and return
+	Example:
+	from klapa import Backend as K
+	kvar = K.zeros((3,4))
+	K.eval(kvar)
+	"""
+	if dtype is None:
+		dtype = floatx()
+	tf_dtype = tf.as_dtype(dtype)
+	return variable(tf.constant_initializer(0., dtype=tf_dtype)(shape), dtype, name)
+
+def ones(shape, dtype=None, name=None):
+	"""Instantiate all-ones tensor variable and return
+	Example:
+	from klapa import backend as K
+	kvar = K.ones((3,4))
+	K.eval(kvar)
+	"""
+	if dtype is None:
+		dtype = floatx()
+	tf_dtype = tf.as_dtype(dtype)
+	return variable(tf.constant_initializer(1., dtype=tf_dtype)(shape), dtype, name)
+
+def eyes(size, dtype=None, name=None):
+	"""Instantiate an identity matrix and return it
+	Example:
+	from klapa import backend as K
+	kvar = K.eye(3)
+	K.eval(kvar)
+	"""
+	return variable(np.eye(size), dtype, name)
+
+def zeros_like(x, dtype=None, name=None):
+	"""Instantiate all zero variable of the same shape as another tensor
+	"""
+	return tf.zeros_like(x, dtype=dtype, name=name)
+
+def ones_like(x, dtype=None, name=None):
+	return tf.ones_like(x, dtype=dtype, name=None)
+
+def identity(x):
+	"""Return a tensor with the same content as input
+	"""
+	return tf.identity(x)
+
+def random_uniform_variable(shape, low, high, dtype=None, name=None, seed=None):
+	"""Instantiate a variable with values drawn from unform distribution
+
+	Example:
+	kvar = K.random_uniform_variable((2,3), 0, 1)
+	K.eval(kvar)
+	"""
+	if dtype is None:
+		dtype = floatx()
+	tf_dtype = tf.as_dtype(dtype)
+	if seed is None:
+		seed = np.random.randint(10e8)
+	value = tf.random_uniform_initializer(low, high, dtype=dtype, seed=seed)(shape)
+	return variable(value, dtype=dtype, name=name)
+
+def random_normal_variable(shape, mean, scale, dtype=None, name=None, seed=None):
+	"""Instantiate a variable with values drawn from normal distribution
+
+	Example:
+	kvar = K.random_normal_variable((2,3), 0, 1)
+	K.eval(kvar)
+	"""
+	if dtype is None:
+		dtype = floatx()
+	tf_dtype = tf.as_dtype(dtype)
+	if seed is None:
+		seed = np.random.randint(10e8)
+	value = tf.random_normal_initializer(mean, scale, dtype=tf_dtype, seed=seed)(shape)
+	return variable(value, dtype=dtype, name=name)
+
+def count_params(x):
+	"""Return number of scalars in klapa variable
+	Example:
+	kvar = K.zeros((2,3))
+	K.count_params(kvar)
+	"""
+	shape = x.get_shape()
+	return np.prod([shape[i]._value for i in range(len(shape))])
+
+def cast(x, dtype):
+	"""Casts a tensor to different dtype and return it
+	Example:
+	from klapa import Backend as K
+	input = K.placeholder((2,3), dtype='float32')
+	input = K.cast(input, dtype='float16')
+	"""
+	return tf.cast(x, dtype)
+
+def update(x, new_x):
+	"""udpate the value of x to new_x
+	"""
+	return tf.assign(x, new_x)
+
+def update_add(x, increment):
+	"""update the value of x by adding increment
+	"""
+	return tf.assign_add(x, increment)
+
+def update_sub(x, decrement):
+	"""Update the value of x by subtracting decrementing
+	"""
+	return tf.assign_sub(x, decrement)
+
+def moving_average_update(x, value, momentum):
+	"""compute the moving average of a variable
+	"""
+	return moving_averages.assign_moving_average(x, value, momentum, zero_debias=False)
+
+# LINEAR ALGEBRA
+def dot(x, y):
+	"""Muultiply two tensors and return value
+	Example:
+	x = K.placeholder(shape=(2, 3))
+	y = K.placeholder(shape=(3, 4))
+	xy = K.dot(x, y)
+
+	With nD tensor multiplication, the behavior is like Theano
+	"""
+	if ndim(x) is not None and (ndim(x) > 2 or ndim(y) > 2):
+		x_shape = []
+		for i, s in zip(int_shape(x), tf.unstack(tf.shape(x))):
+			if i is not None:
+				x_shape.append(i)
+			else:
+				x_shape.append(s)
+		x_shape = tuple(x_shape)
+		y_shape = []
+		for i, s in zip(int_shape(y), tf.unstack(tf.shape(y))):
+			if i is not None:
+				y_shape.append(i)
+			else:
+				y_shape.append(s)
+
+		y_shape = tuple(y_shape)
+		y_permute_dim = list(range(ndim(y)))
+		y_permute_dim = [y_permute_dim.pop(-2)] + y_permute_dim
+		xt = tf.reshape(x, [-1, x_shape[-1]])
+		yt = tf.reshape(tf.transpose(y, perm=y_permute_dim), [y_shape[-2], -1])
+		return tf.reshape(tf.matmul(xt, yt), x_shape[:-1] + y_shape[:-2] + y_shape[-1:])
+
+	if is_sparse(x):
+		out = tf.sparse_tensor_dense_matmul(x, y)
+	else:
+		out = tf.matmul(x, y)
+	return out
+
+def batch_dot(x, y, axes=None):
+	"""Batchwise dot product
+	batch_dot results in tensor or variable with less dimensions than 
+	input.
+	input is klapa tensor or variable with ndim >=2
+	Example:
+	x = [[1, 2], [3, 4]] and y = [[5, 6], [7, 8]]
+	batch_dot(x, y, axes=1) = [[17, 53]]
+
+	x_batch = K.ones(shape=(32, 20, 1))
+	y_batch = K.ones(shape=(32, 30, 20))
+	xy_batch_dot = K.batch_dot(x_batch, y_batch, axes=[1,2])
+	K.int_shape(xy_batch_dot)
+	O/P: (32, 1, 30)
+	"""
+	if isinstance(axes, int):
+		axes = (axes, axes)
+	x_ndim = ndim(x)
+	y_ndim = ndim(y)
+	if x_ndim > y_ndim:
+		diff = x_ndim - y_ndim
+		y = tf.reshape(y, tf.concat([tf.shape(y), [1] * (diff)], axis=0))
+	elif y_ndim > x_ndim:
+		diff = y_ndim - x_ndim
+		x = tf.reshape(x, tf.concat([tf.shape(x), [1] * (diff)], axis=0))
+	else:
+		diff = 0
+	if ndim(x) == 2 and ndim(y) == 2:
+		if axes[0] == axes[1]:
+			out = tf.reduce_sum(tf.multiply(x, y), axes[0])
+		else:
+			out = tf.reduce_sum(tf.multiply(tf.transpose(x, [1,0]), y), axes[1])
+	else:
+		if axes is not None:
+			adj_x = None if axes[0] == ndim(x) - 1 else True
+			adj_y = True if axes[1] == ndim(y) - 1 else None
+		else:
+			adj_x = None
+			adj_y = None
+		out = tf.matmul(x, y, adjoint_a=adj_x, adjoint_b=adj_y)
+	if diff:
+		if x_ndim > y_ndim:
+			idx = x_ndim + y_ndim - 3
+		else:
+			idx = x_ndim - 1
+		out = tf.squeeze(out, list(range(idx, idx + diff)))
+	if ndim(out) == 1:
+		out = expand_dims(out, 1)
+	return out
+
+def transpose(x):
+	"""Transpose a tensor
+	"""
+	return tf.transpose(x)
+
+def gather(reference, indices):
+	"""retrieve teh elements of indices in a tensor reference
+	"""
+	return tf.gather(reference, indices)
+
+# ELEMENT WISE OPERATIONS
+
+def max(x, axis=None, keepdims=False):
+	"""Maximum value in a tensor
+	"""
+	return tf.reduce_max(x, axis=axis, keep_dims=keepdims)
+
+
+
 
 
 
