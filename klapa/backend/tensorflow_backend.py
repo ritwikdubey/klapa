@@ -531,29 +531,280 @@ def max(x, axis=None, keepdims=False):
 	"""
 	return tf.reduce_max(x, axis=axis, keep_dims=keepdims)
 
+def min(x, axis=None, keepdims=False):
+	"""minimum value in a tensor
+	"""
+	return tf.reduce_min(x, axis=axis, keep_dims=keepdims)
 
+def sum(x, axis=None, keepdims=False):
+	"""Sum the values in a tensor along side a specific axis
+	"""
+	return tf.reduce_sum(x, axis=axis, keep_dims=keepdims)
 
+def prod(x, axis=None, keepdims=False):
+	"""Multiplies the value in the tensor alongside an axis
+	"""
+	return tf.reduce_prod(x, axis=axis, keep_dims=keepdims)
 
+def cumsum(x, axis=0):
+	"""Cumulative sum of the values of tensor, alongside a specific axis
+	"""
+	return tf.cumsum(x, axis=axis)
 
+def cumprod(x, axis=0):
+	"""cumulative product of the value in tensor alongside an axis
+	"""
+	return tf.cumprod(x, axis=axis)
 
+def var(x, axis=None, keepdims=False):
+	"""Variance of a tensor alongside an axis
+	"""
+	if x.dtype.base_dtype == tf.bool:
+		x = tf.cast(x, floatx())
+	m = tf.reduce_mean(x, axis=axis, keep_dims=True)
+	devs_squared = tf.square(x - m)
+	return tf.reduce_mean(dev_squared, axis=axis, keep_dims=keepdims)
 
+def std(x, axis=None, keepdims=False):
+	"""Standard deviation of the tensor, alongside the specific axis
+	"""
+	return tf.sqrt(var(x, axis=axis, keepdims=keepdims))
 
+def mean(x, axis=None, keepdims=False):
+	if x.dtype.base_dtype == tf.bool:
+		x = tf.cast(x, floatx())
+	return tf.reduce_mean(x, axis=axis, keep_dims=keepdims)
 
+def any(x, axis=None, keepdims=False):
+	"""Logical OR"""
+	x = tf.cast(x, tf.bool)
+	return tf.reduce_any(x, axis=axis, keep_dims=keepdims)
 
+def all(x, axis=None, keepdims=False):
+	"""Logical AND"""
+	x = tf.cast(x, tf.bool)
+	return tf.reduce_all(x, axis=axis, keep_dims=keepdims)
 
+def argmax(x, axis=-1):
+	"""Return the index of max value along the axis
+	"""
+	return tf.argmax(x, axis)
 
+def argmin(x, axis=-1):
+	"""Return the index of minimum value along an axis
+	"""
+	return tf.argmin(x, axis)
 
+def square(x):
+	return tf.square(x)
 
+def abs(x):
+	return tf.abs(x)
 
+def sqrt(x):
+	zero = _to_tensor(0., x.dtype.base_dtype)
+	inf = _to_tensor(np.inf, x.dtype.base_dtype)
+	x = tf.clip_by_value(x, zero, inf)
+	return tf.sqrt(x)
 
+def exp(x):
+	return tf.exp(x)
 
+def log(x):
+	return tf.log(x)
 
+def logsumexp(x, axis=None, keepdims=False):
+	"""Compute log(sum(exp(elements across a dim in tensor)))
+	This implementation is better than log(sum(exp(x))) because it 
+	protects from large input overflows and small input underflows
+	"""
+	return tf.reduce_logsumexp(x, axis=axis, keep_dims=keepdims)
 
+def round(x):
+	"""Element wise rounding to closest integer
+	"""
+	return tf.round(x)
 
+def sign(x):
+	return tf.sign(x)
 
+def pow(x, a):
+	return tf.pow(x, a)
 
+def clip(x, min_value, max_value):
+	if(max_value is not None and max_value < min_value):
+		max_value = min_value
+	if max_value is None:
+		max_value = np.inf
+	min_value = _to_tensor(min_value, x.dtype.base_dtype)
+	max_value = _to_tensor(max_value, x.dtype.base_dtype)
+	return tf.clip_by_value(x, min_value, max_value)
 
+def equal(x, y):
+	return tf.equal(x, y)
 
+def not_equal(x, y):
+	return tf.not_equal(x, y)
+
+def greater(x, y):
+	return tf.greater(x, y)
+
+def greater_equal(x, y):
+	return tf.greater_equal(x, y)
+
+def less(x, y):
+	return tf.less(x, y)
+
+def less_equal(x, y):
+	return tf.less_equal(x, y)
+
+def maximum(x, y):
+	return tf.maximum(x, y)
+
+def minimum(x, y):
+	return tf.minimum(x, y)
+
+def sin(x):
+	return tf.sin(x)
+
+def cos(x):
+	return tf.cos(x)
+
+def normalize_batch_in_training(x, gamma, beta, reduction_axes, epsilon=1e-3):
+	"""Compute mean and std for a batch then apply batch_normalization on batch
+	"""
+	mean, var = tf.nn.moments(x, reduction_axes, shift=None, name=None, keep_dims=False)
+	if sorted(reduction_axes) == list(range(ndim(x)))[:-1]:
+		normed = tf.nn.batch_normalization(x, mean, var, beta, gamma, epsilon)
+	else:
+		target_shape = []
+		for axis in range(ndim(x)):
+			if axis in reduction_axes:
+				target_shape.append(1)
+			else:
+				target_shape.append(tf.shape(x)[axis])
+		target_shape = tf.stack(target_shape)
+
+		broadcast_mean = tf.reshape(mean, target_shape)
+		broadcast_var = tf.reshape(var, target_shape)
+		if gamma is None:
+			broadcast_gamma = None
+		else:
+			broadcast_gamma = tf.reshape(gamma, target_shape)
+		if beta is None:
+			broadcast_beta = None
+		else:
+			broadcast_beta = tf.reshape(beta, target_shape)
+		normed = tf.nn.batch_normalization(x, broadcast_mean, broadcast_var, broadcast_beta,
+											broadcast_gamma, epsilon)
+	returned normed, mean, var
+
+def batch_normalization(x, mean, var, beta, gamma, epsilon=1e-3):
+	"""Applies batch normalization on x given mean, var, beta and gamma
+	"""
+	return tf.nn.batch_normalization(x, mean, var, beta, gamma, epsilon)
+
+# SHAPE OPERATIONS
+
+def concatenate(tensors, axis=-1):
+	"""Concatenate a list of tensors alongside the specific axis
+	"""
+	if axis < 0:
+		rank = ndim(tensors[0])
+		if rank:
+			axis %= rank
+		else:
+			axis = 0
+
+	if py_all([is_sparse(x) for x in tensors]):
+		return tf.sparse_concat(axis, tensors)
+	else:
+		return tf.concat([to_dense(x) for x in tensors], axis)
+
+def reshape(x, shape):
+	return tf.reshape(x, shape)
+
+def permute_dimension(x, pattern):
+	return tf.transpose(x, perm=pattern)
+
+def resize_images(x, height_factor, width_factor, data_format):
+	"""Resize the image in 4D tensor
+	"""
+	if data_format == 'channels_first':
+		original_shape = int_shape(x)
+		new_shape = tf.shape(x)[2:]
+		new_shape *= tf.constant(np.array([height_factor, width_factor]).astype('int32'))
+		x = permute_dimension(x, [0, 2, 3, 1])
+		x = tf.image.resize_nearest_neighbor(x, new_shape)
+		x = permute_dimension(x, [0, 3, 1, 2])
+		x.set_shape((None, None, original_shape[2] * height_factor if original_shape[2] is not None else None, 
+						original_shape[3] * width_factor if original_shape[3] is not None else None))
+		return x
+	elif data_format == 'channels_last':
+		original_shape = int_shape(x)
+		new_shape = tf.shape(x)[1:3]
+		new_shape *= tf.constant(np.array([height_factor, width_factor]).astype('int32'))
+		x = tf.image.resize_nearest_neighbor(x, new_shape)
+		x.set_shape((None, original_shape[1] * height_factor if original_shape[1] is not None else None,
+					original_shape[2] * width_factor if original_shape[2] is not None else None))
+		return x
+	else:
+		raise ValueError('Invalid data format:', data_format)
+
+def resize_volumes(x, depth_factor, height_factor, width_factor, data_format):
+	"""Resize volume contained in 5D tensor
+	"""
+	if data_format == 'channels_first':
+		output = repeat_elements(x, depth_factor, axis=2)
+		output = repeat_elements(output, height_factor, axis=3)
+		output = repeat_elements(output, width_factor, axis=4)
+		return output
+	elif data_format == 'channels_last':
+		output = repeat_elements(x, depth_factor, axis=1)
+		output = repeat_elements(output, height_factor, axis=2)
+		output = repeat_elements(output, width_factor, axis=3)
+		return output
+	else:
+		raise ValueError('Invalid data_format:', data_format)
+
+def repeat_elements(x, rep, axis):
+	"""Repeats the elements of a tensor along axis. If x has shape (s1, s2, s3) and axis is 1,
+	the output will be (s1, s2*rep, s3)"""
+	x_shape = x.get_shape().as_list()
+	if x_shape[axis] is not None:
+		splits = tf.split(value=x, num_or_size_splits=x_shape[axis], axis=axis)
+		x_rep = [s for s in splits for _ in range(rep)]
+		return concatenate(x_rep, axis)
+
+	# x_shape[axis] is None	
+	# Repeating
+	auxiliary_axis = axis + 1
+	x_shape = tf.shape(x)
+	x_rep = tf.expand_dims(x, axis=auxiliary_axis)
+	reps = np.ones(len(x.get_shape()) + 1)
+	reps[auxiliary_axis] = rep
+	x_rep = tf.tile(x_rep, reps)
+
+	# Merging
+	reps = np.delete(reps, auxiliary_axis)
+	reps[axis] = rep
+	reps = tf.constant(reps, dtype='int32')
+	x_shape = x_shape * reps
+	x_rep = tf.reshape(x_rep, x_shape)
+
+	# Fix shape representation
+	x_shape = x.get_shape().as_list()
+	x_rep.set_shape(x_shape)
+	x_rep._keras_shape = tuple(x_shape)
+	return x_rep
+
+def repeat(x, n):
+	"""Repeat a 2D tensor. If x has shape (samples, dim) and n is 2, the output is (samples, 2, dim)
+	"""
+	assert ndim(x) == 2:
+	x = tf.expand_dims(x, 1)
+	pattern = tf.stack([1, n, 1])
+	return tf.tile(x, pattern)
 
 
 
