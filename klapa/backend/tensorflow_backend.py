@@ -806,6 +806,215 @@ def repeat(x, n):
 	pattern = tf.stack([1, n, 1])
 	return tf.tile(x, pattern)
 
+def arange(start, stop=None, step=1, dtype='int32'):
+	"""Create 1D tensor containing a sequence of integers
+	If only one argument is provided, it's a stop argument
+	"""
+	if stop is None and start < 0:
+		start = 0
+	result = tf.range(start, limit=stop, delta=step, name='arange')
+	if dtype != 'int32':
+		result = cast(result, dtype)
+	return result
+
+def tile(x, n):
+	"""create a tensor by tiling x by n
+	"""
+	if isinstance(n, int):
+		n = [n]
+	return tf.tile(x, n)
+
+def flatten(x):
+	return tf.reshape(x, [-1])
+
+def batch_flatten(x):
+	"""Turn a nD tensor into a 2D tensor with same 0th dimension 
+	Flattens each data sample of a batch
+	"""
+	x = tf.reshape(x, tf.stack([-1, prod(shape(x)[1:])]))
+
+def expand_dims(x, axis=-1):
+	"""Add 1 sized dimension at index axis
+	"""
+	return tf.expand_dims(x, axis)
+
+def squeeze(x, axis):
+	"""Removes a 1 dimension from the tensor at index axis
+	"""
+	return tf.squeeze(x, [axis])
+
+def temporal_padding(x, padding=(1, 1)):
+	"""Pad the middle dimension of a 3D array
+	"""
+	assert len(padding) == 2
+	pattern = [[0, 0], [padding[0], padding[1]], [0, 0]]
+	return tf.pad(x, pattern)
+
+def spatial_2d_padding(x, padding=((1, 1), (1, 1)), data_format=None):
+	"""Pads the 2nd and 3rd dimensions of a 4D tensor
+	"""
+	assert len(padding) == 2
+	assert len(padding[0]) == 2
+	assert len(padding[1]) == 2
+
+	if data_format is None:
+		data_format = image_data_format()
+	if data_format not in {'channel_first', 'channel_last'}:
+		raise ValueError('Unknown data_format ' + str(data_format))
+
+	if data_format == 'channel_first':
+		pattern = [[0, 0],
+				   [0, 0],
+				   list(padding[0]),
+				   list(padding[1])]
+	else:
+		pattern = [[0, 0],
+					list(padding[0]), list(padding[1]),
+					[0, 0]]
+	return tf.pad(x, pattern)
+
+def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
+	"""Pads 5D tensor with zeros along with depth height and width dimension
+	Pads these dimensions with respectively padding[0], padding[1] and
+	padding[2] zeros left and right
+	"""
+	assert len(padding) == 3
+	assert len(padding[0]) == 2
+	assert len(padding[1]) == 2
+	assert len(padding[2]) == 2
+	if data_format is None:
+		data_format = image_data_format()
+	if data_format not in {'channels_last', 'channel_first'}:
+		raise ValueError('Unknown data_format: '+str(data_format))
+
+	if data_format == 'channel_first':
+		pattern = [
+					[0, 0],
+					[0, 0],
+					[padding[0][0], padding[0][1]],
+					[padding[1][0], padding[1][1]],
+					[padding[2][0], padding[2][1]]
+					]
+	else:
+		pattern = [
+					[0, 0],
+					[padding[0][0], padding[0][1]],
+					[padding[1][0], padding[1][1]],
+					[padding[2][0], padding[2][1]],
+					[0, 0]
+					]
+	return tf.pad(x, pattern)
+
+def stack(x, axis=0):
+	"""Stacks a list of rank R tensors into rank R+1 tensor
+	"""
+	return tf.stack(x, axis=axis)
+
+def one_hot(indices, num_classes):
+	return tf.one_hot(indices, depth=num_classes, axis=-1)
+
+def reverse(x, axes):
+	if isinstance(axes, int):
+		axes = [axes]
+	return tf.reverse(x, axes)
+
+# VALUE MANIPULATION
+
+def get_value(x):
+	return x.eval(session=get_session())
+
+def batch_get_value(ops):
+	"""Returns the value of more than one tensor variable
+	"""
+	if ops:
+		return get_session().run(ops)
+	else:
+		return []
+
+def set_value(x, value):
+	"""Set the value of a variable, from a numpy array
+	"""
+	value = np.asarray(value, dtype=dtype(x))
+	tf_dtype = tf.as_dtype(x.dtype.name.split('_')[0])
+	if hasattr(x, '_assign_placeholder'):
+		_assign_placeholder = x._assign_placeholder
+		assign_op = x._assign_op
+	else:
+		assign_placeholder = tf.placeholder(tf_dtype, shape=value.shape)
+		assign_op = x.assign(assign_placeholder)
+		x._assign_placeholder = assign_placeholder
+		x._assign_op = assign_op
+	get_session().run(assign_op, feed_dict={assign_placeholder: value})
+
+def batch_set_value(tuples):
+	"""Sets the values of many tensor variables at once
+	"""
+	if tuples:
+		assign_ops = []
+		feed_dict = {}
+		for x, value in tuples:
+			value = np.asarray(value, dtype=dtype(x))
+			tf_dtype = tf.as_dtype(x.dtype.name.split('_')[0])
+			if hasattr(x, '_assign_placeholder'):
+				assign_placeholder = x._assign_placeholder
+				assign_op = x._assign_op
+			else:
+				assign_placeholder = tf.placeholder(tf_dtype, shape=value.shape)
+				assign_op = x.assign(assign_placeholder)
+				x._assign_placeholder = assign_placeholder
+				x._assign_op = assign_op
+			assign_ops.append(assign_op)
+			feed_dict[assign_placeholder] = value
+		get_session().run(assign_ops, feed_dict=feed_dict)
+
+def get_variable_shape(x):
+	return int_shape(x)
+
+def print_tensor(x, message=''):
+	"""Print message and tensor value when evaluated. 
+	"""
+	return tf.Print(x, [x], message)
+
+# GRAPH MANIPULATION
+
+class Function(object):
+	"""Runs a computation graph
+	"""
+	def __init__(self, inputs, outputs, updates=None, name=None, **session_kwargs):
+		updates = updates or []
+		if not isinstance(inputs, (list, tuple)):
+			raise TypeError('input to Tensorflow backend function should be list or tuple')
+		if not isinstance(outputs, (list, tuple)):
+			raise TypeError('output to Tensorflow backend function should be list or tuple')
+		if not isinstance(updates, (list, tuple)):
+			raise TypeError('update to Tensorflow backend function should be list or tuple')
+		self.inputs = list(inputs)
+		self.outputs = list(outputs)
+		with tf.control_dependencies(self.outputs):
+			update_ops = []
+			for update in updates:
+				if isinstance(update, tuple):
+					p, new_p = update
+					updates_ops.append(tf.assign(p, new_p))
+				else:
+					updates_ops.append(update)
+			self.updates_op = tf.group(*updates_ops)
+		self.name = name
+		self.session_kwargs = session_kwargs
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
