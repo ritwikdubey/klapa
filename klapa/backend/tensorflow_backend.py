@@ -1002,6 +1002,311 @@ class Function(object):
 		self.name = name
 		self.session_kwargs = session_kwargs
 
+	def __call__(self, inputs):
+		if not isinstance(inputs, (list, tuple)):
+			raise ValueError('Input should be a list or tuple')
+		feed_dict = {}
+		for tensor, value in zip(self.inputs, inputs):
+			if is_sparse(tensor):
+				sparse_coo = value.tocoo()
+				indices = np.concatenate((np.expand_dims(sparse_coo.row, 1),
+										  np.expand_dims(sparse_coo.col, 1)), 1)
+				value = (indices, sparse_coo.data, sparse_coo.shape)
+			feed_dict[tensor] = value
+		session = get_session()
+		updated = session.run(self.output + [self.updates_op],
+							  feed_dict=feed_dict, **self.session_kwargs)
+		return updated[:len(self.outputs)]
+
+def function(inputs, outputs, updates=None, **kwargs):
+	"""Instantiate a klapa function
+	"""
+	if kwargs:
+		for key in kwargs:
+			if not (has_arg(tf.Session.run, key, True) or has_arg(Function.__init__, key, True)):
+				msg = 'Invalid argument "%s" passed to K.function with Tensorflow backend' % key
+				raise ValueError(msg)
+	Function(inputs, outputs, updates=updates, **kwargs)
+
+def gradients(loss, variables):
+	"""Return the gradient of variables wrt loss
+	"""
+	return tf.gradients(loss, variables, colocate_gradients_with_ops=True)
+
+def stop_gradient(variables):
+	"""Returns variables but with zero gradient wrt other variable
+	"""
+	if isinstance(variables, (list, tuple)):
+		return map(tf.stop_gradient, variables)
+	else:
+		return tf.stop_gradient(variables)
+
+
+# CONTROL FLOW
+
+def rnn(step_function, inputs, initial_states, go_backwards=False, 
+		mask=None, constants=None, unroll=False, input_length=None):
+	"""Iterate over time dimension of a tensor
+	"""
+	ndim = len(inputs.get_shape())
+	if ndim < 3:
+		return ValueError('Input should be atleast 3D')
+	axes = [1, 0] + list(range(2, ndim))
+	inputs = tf.transpose(inputs, (axes))
+
+	if mask is not None:
+		if mask.dtype != tf.bool:
+			mask = tf.cast(mask, tf.bool)
+		if len(mask.get_shape()) == ndim - 1:
+			mask = expand_dims(mask)
+		mask = tf.transpose(mask, axes)
+
+	if constants is None:
+		constants = []
+
+	global uses_learning_phase
+	uses_learning_phase = False
+
+	if unroll:
+		if not inputs.get_shape()[0]:
+			raise ValueError('Unrolling requires a fixed number of timestamps')
+		states = initial_states
+		successive_states = []
+		successive_outputs = []
+
+		input_list = tf.unstack(inputs)
+		if go_backwards:
+			input_list.reverse()
+
+		if mask is not None:
+			mask_list = tf.unstack(mask)
+			if go_backwards:
+				mask_list.reverse()
+
+			for inp, mask_t in zip(input_list, mask_list):
+				output, new_states = step_function(inp, states + constants)
+				if getattr(output, '_uses_learning_phase', False):
+					uses_learning_phase = True
+
+				tiled_mask_t = tf.tile(mask_t, tf.stack([1, tf.shape(output)[1]]))
+
+				if not successive_outputs:
+					prev_output = zeros_like(output)
+				else:
+					prev_output = successive_outputs[-1]
+
+				output = tf.where(tiled_mask_t, output, prev_output)
+				return_states = []
+				for state, new_state in zip(states, new_states):
+					tiled_mask_t = tf.tile(mask_t, tf.stack([1, tf.shape(new_state)[1]]))
+					return_states.append(tf.where(tiled_mask_t, new_state, state))
+
+				states = return_states
+				successive_outputs.append(output)
+				successive_states.append(states)
+			last_output = successive_outputs[-1]
+			new_states = successive_states[-1]
+			outpus = tf.stack(successive_outputs)
+		else:
+			for inp in input_list:
+				output, states = step_function(inp, states + constants)
+				if getattr(output, '_uses_learning_phase', False):
+					uses_learning_phase = True
+				successive_outputs.append(output)
+				successive_states.append(states)
+			last_output = successive_outputs[-1]
+			new_states = successive_states[-1]
+			outputs = tf.stack(successive_outputs)
+
+	else:
+		if go_backwards:
+			inputs = reverse(inputs, 0)
+
+		states = tuple(initial_states)
+		time_steps = tf.shape(inputs)[0]
+		outputs, _ = step_function(inputs[0], initial_states + constants)
+		output_ta = tensor_array_ops.TensorArray(
+			dtype=outputs.dtype,
+			size=time_steps,
+			tensor_array_name='output_ta')
+		input_ta = tensor_array_ops.TensorArray(
+			dtype=inputs.dtype,
+			size=time_steps,
+			tensor_array_name='input_ta')
+		input_ta = input_ta.unstack(inputs)
+		time = tf.constant(0, dtype='int32', name='time')
+
+		if mask is not None:
+			if not states:
+				raise ValueError('No initial state provided'
+								'When using masking in RNN, you should provide initial states'
+								'(and your step function should return as its first state time t'
+								' the output at time t-1)')
+			if go_backwards:
+				mask = reverse(mask, 0)
+
+			mask_ta = tensor_array_ops.TensorArray(dtype=tf.bool, size=time_steps, tensor_array_name='mask_ta')
+			mask_ta = mask_ta.unstack(mask)
+
+			def _step(time, output_ta_t, *states):
+				"""RNN step function
+				"""
+				current_input = input_ta.read(time)
+				mask_t = mask_ta.read(time)
+				output, new_states = step_function(current_input, tuple(states) + tuple(constants))
+
+				if getattr(output, '_uses_learning_phase', False):
+					global uses_learning_phase
+					uses_learning_phase = True
+				for state, new_state in zip(states, new_states):
+					new_state.set_shape(state.get_shape())
+				tiled_mask_t = tf.tile(mask_t, tf.stack([1, tf.shape(output)[1]]))
+				output = [tf.where(tiled_mask_t, new_states[i], states[i]) for i in range(len(states))]
+				output_ta_t = output_ta_t.write(time, output)
+				return (time + 1, output_ta_t) + tuple(new_states)
+		else:
+			def _step(time, output_ta_t, *states):
+				"""RNN step function
+				"""
+				current_input = input_ta.read(time)
+				output, new_states = step_function(current_input, tuple(states) + tuple(constants))
+
+				if getattr(output, '_uses_learning_phase', False):
+					global uses_learning_phase
+					uses_learning_phase = True
+				for state, new_state in zip(states, new_states):
+					new_state.set_shape(state.get_shape())
+				output_ta_t = output_ta_t.write(time, output)
+				return (time + 1, output_ta_t) + tuple(new_states)
+
+		final_outputs = control_flow_ops.while_loop(
+			cond=lambda time, *_: time < time_steps,
+			body = _step,
+			loop_vars = (time, output_ta) + states,
+			parallel_iterations = 32,
+			swap_memory = True)
+		last_time = final_outputs[0]
+		output_ta = final_outputs[1]
+		new_states = final_outputs[2:]
+
+		outputs = output_ta.stack()
+		last_output = output_ta.read(last_time -1 )
+
+	axes = [1, 0] + list(range(2, len(outputs.get_shape())))
+	outputs = tf.transpose(outputs, axes)
+	last_output._uses_learning_phase = uses_learning_phase
+	return last_output, outputs, new_states
+
+def switch(condition, then_expression, else_expression):
+	"""Switches between two operations depending on a scalar value
+	Both then_expression and else_expression should of same shape
+	"""
+	if condition.dtype != tf.bool:
+		condition = tf.cast(condition, 'bool')
+	cond_ndim = ndim(condition)
+	if not cond_ndim:
+		if not callable(then_expression):
+			def then_expression_fn():
+				return then_expression
+		else:
+			then_expression_fn = then_expression
+		if not callable(else_expression):
+			def else_expression_fn():
+				return else_expression
+		else:
+			else_expression_fn = else_expression
+		x = tf.cond(condition, then_expression_fn, else_expression_fn)
+
+	else:
+		if callable(then_expression):
+			then_expression = then_expression()
+		if callable(else_expression):
+			else_expression = else_expression()
+		expr_ndim = ndim(then_expression)
+
+		if cond_ndim > expr_ndim:
+			raise ValueError('Rank of condition should be less than or equal to rank of then_expression'
+				' and else_expression. ndim(condition) = ' + str(cond_ndim) + ', ndim(then_expression)=' + str(expr_ndim))
+
+		if cond_ndim > 1:
+			ndim_diff = expr_ndim - cond_ndim
+			cond_shape = tf.concat([tf.shape(condition), [1] * ndim_diff], axis=0)
+			condition = tf.reshape(condition, cond_shape)
+			expr_shape = tf.shape(then_expression)
+			shape_diff = expr_shape - cond_shape
+			tile_shape = tf.where(shape_diff > 0, expr_shape, tf.ones_like(expr_shape))
+			condition = tf.tile(condition, tile_shape)
+		x = tf.where(condition, then_expression, else_expression)
+	return x
+
+def in_train_phase(x, alt, training=None):
+	"""Select x in train phase, alt other wise. x and alt should have the same shape
+	"""
+	if training is None:
+		training = learning_phase()
+		uses_learning_phase = True
+	else:
+		uses_learning_phase = False
+
+	if training is 1 or training is True:
+		if callable(x):
+			return x()
+		else:
+			return x
+
+	elif training is 0 or training is False:
+		if callable(alt):
+			return alt()
+		else:
+			return alt
+	x = switch(training, x, alt)
+	if uses_learning_phase:
+		x._uses_learning_phase = true
+	return x
+
+def in_test_phase(x, alt, training=None):
+	"""Select x in test phase, alt otherwise. x and alt should be of same shape
+	"""
+	return in_train_phase(x, alt, training=training)
+
+# NN Operations
+
+def relu(x, alpha=0., max_value=None):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
