@@ -1272,9 +1272,172 @@ def in_test_phase(x, alt, training=None):
 # NN Operations
 
 def relu(x, alpha=0., max_value=None):
+	"""rectified linear unit
+	with default values it returns max(x, 0)
+	"""
+	if alpha != 0:
+		negative_part = tf.nn.relu(-x)
+	x = tf.nn.relu(x)
+	if max_value is not None:
+		max_value = _to_tensor(max_value, x.dtype.base_dtype)
+		zero = _to_tensor(0., x.dtype.base_dtype)
+		x = tf.clip_by_value(x, zero, max_value)
+	if alpha != 0:
+		alpha = _to_tensor(alpha, x.dtype.base_dtype)
+		x -= alpha * negative_part
+	return x
 
+def elu(x, alpha=1.):
+	"""Exponential linear unit
+	"""
+	res = tf.nn.elu(x)
+	if alpha == 1:
+		return res
+	else:
+		return tf.where(x > 0, res, alpha * res)
 
+def softmax(x):
+	"""Softmax on tensor
+	"""
+	return tf.nn.softmax(x)
 
+def softplux(x):
+	"""softplus of a tensor
+	"""
+	return tf.nn.softplus(x)
+
+def softsign(x):
+	"""softsign of a tensor
+	"""
+	return tf.nn.softsign(x)
+
+def categorical_crossentropy(target, output, from_logits=False):
+	"""Categorical cross entropy between output tensor and target tensor
+	"""
+	if not from_logits:
+		output /= tf.reduce_sum(output, axis=len(output.get_shape()) -1, keep_dims=True)
+		_epsilon = _to_tensor(epsilon(), output.dtype.base_dtype)
+		output = tf.clip_by_value(output, _epsilon, 1. - _epsilon)
+		return - tf.reduce_sum(target * tf.log(output), axis=len(output.get_shape()) - 1)
+	else:
+		return tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=output)
+
+def sparse_categorical_entropy(target, output, from_logits=False):
+	"""Categorical cross entropy with integer targets
+	"""
+	if not from_logits:
+		_epsilon = _to_tensor(epsilon(), output.dtype.base_dtype)
+		output = tf.clip_by_value(output, _epsilon, 1 - _epsilon)
+		output = tf.log(output)
+
+	output_shape = output.get_shape()
+	targets = cast(flatten(target), 'int64')
+	logits = tf.reshape(output, [-1, int(output_shape[-1])])
+	res = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
+	if len(output_shape) == 3:
+		return tf.reshape(res, tf.shape(output)[:-1])
+	else:
+		return res
+
+def binary_crossentropy(target, output, from_logits=False):
+	"""binary crossentropy between an output and a target tensor
+	"""
+	if not from_logits:
+		_epsilon = _to_tensor(epsilon(), output.dtype.base_dtype)
+		output = tf.clip_by_value(output, _epsilon, 1. - _epsilon)
+		output = tf.log(output)
+
+	return tf.nn.sigmoid_cross_entropy_with_logits(labels=target, logits=output)
+
+def sigmoid(x):
+	"""Element wise sigmoid
+	"""
+	return tf.nn.sigmoid(x)
+
+def hard_sigmoid(x):
+	"""segment wise linear approximation of sigmoid
+	"""
+	x = (0.2 * x) + 0.5
+	zero = _to_tensor(0., x.dtype.base_dtype)
+	one = _to_tensor(1., x.dtype.base_dtype)
+	x = tf.clip_by_value(x, zero, one)
+	return x
+
+def tanh(x):
+	"""element wise tanh
+	"""
+	return tf.nn.tanh(x)
+
+def dropout(x, level, noise_shape=None, seed=None):
+	"""Set entries in x to zero at random while scaling the entire tensor
+	"""
+	retain_prob = 1. - level
+	if seed is None:
+		seed = np.random.randint(10e6)
+	return tf.nn.dropout(x * 1., retain_prob, noise_shape, seed=seed)
+
+def l2_normalize(x, axis=None):
+	"""Normalize a tensor wrt L2 norm alongside the specified axis
+	"""
+	return tf.nn.l2_normalize(x, dim=axis)
+
+def in_top_k(predictions, targets, k):
+	"""return whether the targets are in top k prediction
+	"""
+	return tf.nn.in_top_k(predictions, targets, k)
+
+# CONVOLUTIONS
+
+def _preprocess_deconv3d_output_shape(x, shape, data_format):
+	"""Get the output_shape for the 3D deconvolution
+	"""
+	if data_format == 'channel_first':
+		shape = (shape[0], shape[2], shape[3], shape[4], shape[1])
+
+	if shape[0] is None:
+		shape = (tf.shape(x)[0], ) + tuple(shape[1:])
+		shape = tf.stack(list(shape))
+	return shape
+
+def _preprocess_deconv_output_shape(x, shape, data_format):
+	"""Get the output shape of the deconvolution
+	"""
+	if data_format == 'channel_first':
+		shape = (shape[0], shape[2], shape[3], shape[1])
+
+	if shape[0] is None:
+		shape = (tf.shape(x)[0], ) + tuple(shape[1:])
+		shape = tf.stack(list(shape))
+	return shape
+
+def _preprocess_conv2d_input(x, data_format):
+	"""Transpose and cast the input before the conv2d
+	"""
+	if dtype(x) == 'float64':
+		x = tf.cast(x, 'float32')
+	if data_format == 'channels_first':
+		x = tf.transpose(x, (0, 2, 3, 1))
+	return x
+
+def _preprocess_conv3d_input(x, data_format):
+	"""Transpose and cast the input before the conv3d
+	"""
+	if dtype(x) == 'float64':
+		x = tf.cast('float32')
+
+	if data_format == 'channels_first':
+		x = tf.transpose(x, (0, 2, 3, 4, 1))
+	return x
+
+def _preprocess_conv2d_kernel(kernel, data_format):
+	"""Transpose and cast the kernel before the conv2d
+	"""
+	if dtype(kernel) == 'float64':
+		kernel = tf.cast(kernel, 'float32')
+	if data_format == 'channel_first':
+		kernel = tf.transpose(kernel, (2, 3, 1, 0))
+	return kernel
+	
 
 
 
