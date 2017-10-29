@@ -1437,63 +1437,434 @@ def _preprocess_conv2d_kernel(kernel, data_format):
 	if data_format == 'channel_first':
 		kernel = tf.transpose(kernel, (2, 3, 1, 0))
 	return kernel
-	
 
+def _preprocess_conv3d_kernel(kernel, data_format):
+	"""Transpose and cast the kernel before the conv3d
+	"""
+	if dtype(kernel) == 'float64':
+		kernel = tf.cast(kernel, 'float32')
+	if data_format == 'channels_first':
+		kernel = tf.transpose(kernel, (2, 3, 4, 1, 0))
+	return kernel
 
+def _preprocess_padding(padding):
+	"""Convert klapa padding to tensorflow padding
+	"""
+	if padding == 'same':
+		padding = 'SAME'
+	elif padding == 'valid':
+		padding = 'VALID'
+	else:
+		raise ValueError('Invalid padding: ', padding)
+	return padding
 
+def _postprocess_conv2d_output(x, data_format):
+	"""Transpose and cast the output from conv2d if needed
+	"""
+	if data_format == 'channels_first':
+		x = tf.transpose(x, (0, 3, 1, 2))
 
+	if floatx() == 'float64':
+		x = tf.cast(x, 'float64')
+	return x
 
+def conv1d(x, kernel, strides=1, padding='valid', date_format=None, dilation_rate=1):
+	"""1D convolution
+	"""
+	kernel_shape = kernel.get_shape().as_list()
+	if padding == 'casual':
+		left_pad = dilation_rate * (kernel_shape[0] - 1)
+		x = temporal_padding(x, (left_pad, 0))
+		padding = 'valid'
+	padding = _preprocess_padding(padding)
+	if data_format == 'channels_last':
+		tf_data_format = 'NWC'
+	else:
+		tf_data_format = 'NCW'
+	x = tf.nn.convolution(
+		input=x,
+		filter=kernel,
+		dilation_rate=(dilation_rate,),
+		strides=(strides,),
+		padding=padding,
+		data_format=tf_data_format)
+	return x
 
+def conv2d(x, kernel, strides=(1, 1), padding='valid', 
+	data_format=None, dilation_rate=(1, 1)):
+	"""2D convolution
+	"""
+	if data_format is None:
+		data_format = image_data_format()
 
+	if data_format not in {'channels_first', 'channels_last'}:
+		raise ValueError('Unknown data format' + str(data_format))
 
+	x = _preprocess_conv2d_input(x, data_format)
+	padding = _preprocess_padding(padding)
+	x = tf.nn.convolution(
+		input=x,
+		filter=kernel,
+		dilation_rate=dilation_rate,
+		strides=strides,
+		padding=padding,
+		data_format='NHWC')
+	return _postprocess_conv2d_output(x, data_format)
 
+def conv2d_transpose(x, kernel, output_shape, strides=(1, 1),
+	padding='valid', data_format=None):
+	"""2D deconvolution (transpose convolution)
+	"""
+	if data_format is None:
+		data_format = image_data_format()
+	if data_format not in {'channels_last', 'channels_first'}:
+		raise ValueError('Unknown data format ' + str(data_format))
+	if isinstance(output_shape, (tuple_shape)):
+		output_shape = tf.stack(output_shape)
 
+	x = _preprocess_conv2d_input(x, data_format)
+	output_shape = _preprocess_deconv_output_shape(x, output_shape,
+		data_format)
+	padding = _preprocess_padding(padding)
+	strides = (1,) + strides + (1,)
 
+	x = tf.nn.conv2d_transpose(x, kernel, output_shape, strides, padding=padding)
 
+	x = _postprocess_conv2d_output(x, data_format)
+	return x
 
+def separable_conv2d(x, depthwise_kernel, pointwise_kernel, strides=(1, 1), padding='valid',
+						data_format=None, dilation_rate=(1, 1)):
+	"""2D convolution with separable filters
+	"""
+	if data_format is None:
+		data_format = image_data_format()
+	if data_format not in {'channels_first', 'channels_last'}:
+		raise ValueError('Unknown data format' + str(data_format))
 
+	x = _preprocess_conv2d_input(x, data_format)
+	padding = (1,) + strides + (1,)
 
+	x = tf.nn.separable_conv2d(x, depthwise_kernel, pointwise_kernel, strides=strides,
+								padding=padding, rate=dilation_rate)
+	return _postprocess_conv2d_output(x, data_format)
 
+def depthwise_conv2d(x, depthwise_kernel, strides=(1,1), padding='valid', data_format=None, 
+						dilation_rate=(1, 1)):
+	"""2D convolution with separable filters
+	"""
+	if data_format is None:
+		data_format = image_data_format()
 
+	if data_format not in {'channels_first', 'channels_last'}:
+		return ValueError('Invalid data format' + str(data_format))
 
+	x = _preprocess_conv2d_input(x, data_format)
+	padding = _preprocess_padding(padding)
+	strides = (1,) + strides + (1,)
 
+	x = tf.nn.depthwise_conv2d(x, depthwise_kernel, strides=strides, padding=padding, rate=dilation_rate)
+	return _postprocess_conv2d_output(x, data_format)
 
+def conv3d(x, kernel, strides=(1, 1, 1), padding='valid', data_format=None, dilation_rate=(1, 1, 1)):
+	"""3D convolution
+	"""
+	if data_format is None:
+		data_format = image_data_format()
+	if data_format not in {'channels_first', 'channels_last'}:
+		raise ValueError('unknown data format' +str(data_format))
 
+	x = _preprocess_conv3d_input(x, data_format)
+	padding = _preprocess_padding(padding)
+	x = tf.nn.convolution(
+		input=x,
+		filter=kernel,
+		dilation_rate=dilation_rate,
+		strides=strides,
+		padding=padding,
+		data_format='NDHWC')
+	return _postprocess_conv3d_output(x, data_format)
 
+def conv3d_transpose(x, kernel, output_shape, strides=(1, 1, 1), padding='valid', data_format=None):
+	"""3D deconvolution (transposed convolution)
+	"""
+	if data_format is None:
+		data_format = image_data_format()
 
+	if data_format not in {'channels_last', 'channels_first'}:
+		return ValueError('Invalid data format' + str(data_format))
 
+	x = _preprocess_conv3d_input(x, data_format)
+	output_shape = _preprocess_deconv3d_output_shape(x, output_shape, data_format)
+	padding = _preprocess_padding(padding)
+	strides = (1,) + strides + (1,)
 
+	x = tf.nn.conv3d_transpose(x, kernel, output_shape, strides, padding=padding)
+	return _postprocess_conv3d_output(x, data_format)
 
+def pool2d(x, pool_size, strides=(1, 1), padding='valid', data_format=None, pool_mode='max'):
+	"""2D pooling
+	"""
+	if data_format is None:
+		data_format = image_data_format()
 
+	if data_format not in {'channels_last', 'channels_first'}:
+		return ValueError('Invalid data format' + str(data_format))
 
+	padding = _preprocess_padding(padding)
+	strides = (1,) + strides + (1,)
+	pool_size = (1,) + pool_size + (1,)
 
+	x = _preprocess_conv2d_input(x, data_format)
 
+	if pool_mode == 'max':
+		x = tf.nn.max_pool(x, pool_size, strides, padding=padding)
+	elif pool_mode == 'avg':
+		x = tf.nn.avg_pool(x, pool_size, strides, padding=padding)
+	else:
+		raise ValueError('Invalid pooling mode: ', pool_mode)
+	return _postprocess_conv2d_output(x, data_format)
 
+def pool3d(x, pool_size, strides=(1, 1, 1), padding='valid', data_format=None, pool_mode='max'):
+	"""3D pooling
+	"""
+	if data_format is None:
+		data_format = image_data_format()
 
+	if data_format not in {'channels_last', 'channels_first'}:
+		return ValueError('Invalid data format' + str(data_format))
 
+	padding = _preprocess_padding(padding)
+	strides = (1,) + strides + (1,)
+	pool_size = (1,) + pool_size + (1,)
 
+	x = _preprocess_conv3d_input(x, data_format)
 
+	if pool_mode == 'max':
+		x = tf.nn.max_pool3d(x, pool_size, strides, padding=padding)
+	elif pool_mode == 'avg':
+		x = tf.nn.avg_pool3d(x, pool_size, strides, padding=padding)
+	else:
+		raise ValueError('Invalid pooling mode: ', pool_mode)
 
+	return _postprocess_conv3d_output(x, data_format)
 
+def bias_add(x, bias, data_format=None):
+	"""Adds bias vector to a tensor
+	"""
+	if data_format is None:
+		data_format = image_data_format()
 
+	if data_format not in {'channels_last', 'channels_first'}:
+		return ValueError('Invalid data format' + str(data_format))
 
+	bias_shape = int_shape(bias)
+	if len(bias_shape) != 1 and len(bias_shape) != ndim(x) - 1:
+		raise ValueError('Unexpected bias dimension %d, expected to be 1 or %d dimensions' %(len(bias_shape), ndim(x)))
 
+	if ndim(x) == 5:
+		if data_format == 'channels_first':
+			if len(bias_shape) == 1:
+				x += reshape(bias, (1, bias_shape[0], 1, 1, 1))
+			else:
+				x += reshape(bias, (1, bias_shape[3]) + bias_shape[:3])
+		elif data_format == 'channels_last':
+			if len(bias_shape) == 1:
+				x += reshape(bias, (1, 1, 1, bias_shape[0]))
+			else:
+				x += reshape(bias, (1,) + bias_shape)
+	elif ndim(x) == 4:
+		if data_format == 'channels_first':
+			if len(bias_shape) == 1:
+				x += reshape(bias, (1, bias_shape[0], 1, 1))
+			else:
+				x += reshape(bias, (1, bias_shape[2]) + bias_shape[:2])
+		elif data_format == 'channels_last':
+			if len(bias_shape) == 1:
+				x = tf.nn.bias_add(x, bias, data_format='NHWC')
+			else:
+				x += reshape(bias, (1,) + bias_shape)
+	elif ndim(x) == 3:
+		if data_format == 'channels_first':
+			if len(bias_shape) == 1:
+				x += reshape(bias, (1, bias_shape[0], 1))
+			else:
+				x += reshape(bias, (1, bias_shape[1]) + bias_shape[:1])
+		elif data_format == 'channels_last':
+			if len(bias_shape) == 1:
+				x += reshape(bias, (1, 1, bias_shape[0]))
+			else:
+				x += reshape(bias, (1,) + bias_shape)
+	else:
+		x = tf.nn.bias_add(x, bias)
 
+	return x
 
+# RANDOMNESS
 
+def random_normal(shape, mean=0.0, stddev=1.0, dtype=None, seed=None):
+	"""Returns a tensor with normal distribution of values
+	"""
+	if dtype is None:
+		dtype = floatx()
+	if seed is None:
+		seed = np.random.randint(10e6)
+	return tf.random_normal(shape, mean=mean, stddev=stddev, dtype=dtype, seed=seed)
 
+def random_uniform(shape, minval=0.0, maxval=1.0, dtype=None, seed=None):
+	"""Returns a tensor with uniform distribution of values
+	"""
+	if dtype is None:
+		dtype = None()
+	if seed is None:
+		seed = np.random.randint(10e6)
+	return tf.random_uniform(shape, minval=minval, maxval=maxval, dtype=dtype, seed=seed)
 
+def random_binomial(shape, p=0.0, dtype=None, seed=None):
+	"""Returns tensor with random binomial distribution of values
+	"""
+	if dtype is None:
+		dtype = floatx()
+	if seed is None:
+		seed = np.random.randint(10e6)
+	return tf.where(tf.random_uniform(shape, dtype=dtype, seed=seed) <= p, 
+					tf.ones(shape, dtype=dtype),
+					tf.zeros(shape, dtype=dtype))
 
+def truncated_normal(shape, mean=0.0, stddev=1.0, dtype=None, seed=None):
+	"""Return a tensor with truncated random normal distribution of values
+	"""
+	if dtype is None:
+		dtype = floatx()
+	if seed is None:
+		seed = np.random.randint(10e6)
 
+	return tf.truncated_norma(shape, mean, stddev, dtype=dtype, seed=seed)
 
+# CTC
+def ctc_label_dense_to_sparse(labels, label_lengths):
+	"""Converts CTC labels from dense to sparse
+	"""
+	label_shape = tf.shape(labels)
+	num_batches_tns = tf.stack([label_shape[0]])
+	max_num_labels_tns = tf.stack([label_shape[1]])
 
+	def range_less_than(_, current_input):
+		return tf.expand_dims(tf.range(label_shape[1]), 0) < tf.fill(
+			max_num_labels_tns, current_input)
+	init = tf.cast(tf.fill([1, label_shape[1]], 0), tf.bool)
+	dense_mask = functional_ops.scan(range_less_than, label_lengths, 
+		initializer=init, parallel_iterations=1)
+	dense_mask = dense_mask[:, 0, :]
 
+	label_array = tf.reshape(tf.tile(tf.range(0, label_shape[1]), num_batches_tns), label_shape)
 
+	label_ind = tf.boolean_mask(label_array, dense_mask)
 
+	batch_array = tf.transpose(tf.reshape(tf.tile(tf.range(0, label_shape[0]),
+		max_num_labels_tns), reverse(label_shape, 0)))
+	batch_ind = tf.boolean_mask(batch_array, dense_mask)
+	indices = tf.transpose(tf.reshape(concatenate([batch_ind, label_ind], axis=0), [2, -1]))
+	vals_sparse = tf.gather_nd(labels, indices)
+	return tf.SparseTensor(tf.to_int64(indices), vals_sparse, tf.to_int64(label_shape))
 
+def ctc_batch_cost(y_true, x_pred, input_length, label_length):
+	"""Runs CTC loss algorithm on each batch element
+	"""
+	label_length = tf.to_int32(tf.squeeze(label_length))
+	input_length = tf.to_int32(tf.squeeze(input_length))
+	sparse_labels = tf.to_int32(ctc_label_dense_to_sparse(y_true, label_length))
 
+	y_pred = tf.log(tf.transpose(y_pred, perm=[1, 0, 2]) + 1e-8)
 
+	return tf.expand_dims(ctc.ctc_loss(inputs=y_pred, labels=sparse_labels, 
+										sequence_length=input_length), 1)
 
+def ctc_decode(y_pred, input_length, greedy=True, beam_width=100, top_paths=1):
+	"""Decodes the output of softmax. Can use greedy search or contrained dictionary search
+	"""
+	y_pred = tf.log(tf.transpose(y_pred, perm=[1, 0, 2]) + 1e-8)
+	input_length = tf.to_int32(input_length)
 
+	if greedy:
+		(decoded, log_prob) = ctc.ctc_greedy_decoder(inputs=y_pred, sequence_length=input_length)
+	else:
+		(decoded, log_prob) = ctc.ctc_beam_search_decoder(
+			inputs=y_pred,
+			sequence_length=input_length,
+			beam_width=beam_width,
+			top_paths=top_paths)
+	decoded_dense = [tf.sparse_to_dense(st.indices, st.dense_shape, st.values, default_value=-1)
+						for st in decoded]
+	return (decoded_dense, log_prob)
 
+# HIGH ORDER FUNCTIONS
 
+def map_fn(fn, elems, name=None, dtype=None):
+	"""Map the function fn over the element elems and return the outputs
+	"""
+	return tf.map_fn(fn, elems, name=name, dtype=dtype)
+
+def foldl(fn, elems, initializer=None, name=None):
+	"""Reduce elems using fn to combine them from left to right
+	"""
+	return tf.foldl(fn, elems, initializer=initializer, name=name)
+
+def foldr(fn, elems, initializer=None, name=None):
+	"""Reduce elems using fn to combine them from right to left
+	"""
+	return tf.foldr(fn, elems, initializer=initializer, name=name)
+
+def local_conv1d(inputs, kernel, kernel_size, strides, data_format=None):
+	"""Apply 1D conv to unshared weights
+	"""
+	if data_format is None:
+		data_format = image_data_format()
+	if data_format not in {'channels_last', 'channels_first'}:
+		raise ValueError('Unknown data_format ' + str(data_format))
+
+	stride = strides[0]
+	kernel_shape = int_shape(kernel)
+	output_length, feature_dim, filters = kernel_shape
+
+	xs = []
+	for i in range(output_length):
+		slice_length = slice(i * stride, i * stride + kernel_size[0])
+		xs.append(reshape(inputs[:, slice_length, :], (1, -1, feature_dim)))
+	x_aggregrate = concatenate(xs, axis=0)
+	output = batch_dot(x_aggregrate, kernel)
+	return permute_dimensions(output, (1, 0, 2))
+
+def local_conv2d(inputs, kernel, kernel_size, strides, output_shape, data_format=None):
+	"""Apply 2D conv with unshared weights
+	"""
+    if data_format is None:
+        data_format = image_data_format()
+    if data_format not in {'channels_first', 'channels_last'}:
+        raise ValueError('Unknown data_format ' + str(data_format))
+
+    stride_row, stride_col = strides
+    output_row, output_col = output_shape
+    kernel_shape = int_shape(kernel)
+    _, feature_dim, filters = kernel_shape
+
+    xs = []
+    for i in range(output_row):
+    	for i in range(output_col):
+    		slice_row = slice(i * stride_row, i * stride_row + kernel_size[0])
+    		slice_col = slice(i * stride_col, i * stride_col + kernel_size[1])
+    		if data_format == 'channels_first':
+    			xs.append(reshape(inputs[:, :, slice_row, slice_col], 
+    						(1, -1, feature_dim)))
+    		else:
+    			xs.append(reshape(inputs[:, slice_row, slice_col, :],
+    								(1, -1, feature_dim)))
+    x_aggregrate = concatenate(xs, axis=0)
+    output = batch_dot(x_aggregrate, kernel)
+    output = reshape(output, (output_row, output_col, -1, filters))
+
+    if data_format == 'channels_first':
+    	output = permute_dimensions(output, (2, 3, 0, 1))
+    else:
+    	output = permute_dimensions(output, (2, 0, 1, 3))
+    return output
