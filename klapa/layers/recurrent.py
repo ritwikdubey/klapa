@@ -1,5 +1,115 @@
 
 
+class LSTMCell(Layer):
+	"""Cell class for LSTM layer
+	"""
+	def __init__(self, units, activation='tanh', recurrent_activation='hard_sigmoid',
+				use_bias=True, kernel_initializer='glorot_uniform',
+				recurrent_initializer='orthogonal', bias_initializer='zeros',
+				unit_forget_bias=True, kernel_regularizer=None, 
+				recurrent_regularizer=None, bias_regularizer=None,
+				kernel_constraint=None, recurrent_constraint=None, 
+				bias_constraint=None, dropout=0, recurrent_dropout=0,
+				implementation=1, **kwargs):
+		super(LSTMCell, self).__init__(**kwargs)
+		self.units = units
+		self.activation = activations.get(activation)
+		self.recurrent_activation = activations.get(recurrent_activation)
+		self.use_bias = use_bias
+
+		self.kernel_initializer = initializers.get(kernel_initializer)
+		self.recurrent_initializer = initializers.get(recurrent_initializer)
+		self.bias_initializer = initializers.get(bias_initializer)
+		self.unit_forget_bias = unit_forget_bias
+
+		self.kernel_regularizer = regularizers.get(kernel_regularizer)
+		self.recurrent_regularizer = regularizers.get(recurrent_regularizer)
+		self.bias_regularizer = regularizers.get(bias_regularizer)
+
+		self.dropout = min(1., max(0., dropout))
+		self.recurrent_dropout = min(1., max(0., recurrent_dropout))
+		self.implementation = implementation
+		self.state_size = (self.units, self.units)
+		self._dropout_mask = None
+		self._recurrent_dropout_mask = None
+
+	def build(self, input_shape):
+		input_dim = input_shape[-1]
+		self.kernel = self.add_weight(shape=(input_dim, self.units * 4),
+										name='kernel',
+										initializer=self.kernel_initializer,
+										regularizer=self.kernel_regularizer,
+										constraint=self.kernel_constraint)
+		self.recurrent_kernel = self.add_weight(
+			shape=(self.units, self.units * 4),
+			name='recurrent_kernel',
+			initializer=self.recurrent_initializer,
+			regularizer=self.recurrent_regularizer,
+			constraint=self.recurrent_constraint)
+
+		if self.use_bias:
+			if self.unit_forget_bias:
+				def bias_initializer(shape, *args, **kwargs):
+					return K.concatenate([
+						self.bias_initializer((self.units,), *args, **kwargs),
+						initializers.Ones()((self.units * 2,), *args, **kwargs),
+						])
+			else:
+				bias_initializer = self.bias_initializer
+			self.bias = self.add_weight(shape=(self.units * 4,),
+										name='bias', initializer=bias_initializer,
+										regularizer=self.bias_regularizer,
+										constraint=self.bias_constraint)
+		else:
+			self.bias = None
+
+		self.kernel_i = self.kernel[:, :self.units]
+		self.kernel_f = self.kernel[:, self.units: self.units * 2]
+		self.kernel_c = self.kernel[:, self.units * 2: self.units * 3]
+		self.kernel_o = self.kernel[:, self.units * 3]
+
+		self.recurrent_kernel_i = self.rcurrent_kernel[:, :self.units]
+		self.recurrent_kernel_f = self.recurrent_kernel[:, self.units : self.units * 2]
+		self.recurrent_kernel_c = self.recurrent_kernel[:, self.units * 2 : self.units * 3]
+		self.recurrent_kernel_o = self.recurrent_kernel[:, self.units * 3]
+
+		if self.use_bias:
+			self.bias_i = self.bias[:self.units]
+			self.bias_f = self.bias[self.units: self.units * 2]
+			self.bias_c = self.bias[self.units * 2 : self.units * 3]
+			self.bias_o = self.bias[self.units * 3]
+		else:
+			self.bias_i = None
+			self.bias_f = None
+			self.bias_c = None
+			self.bias_o = None
+		self.built = True
+
+	def _generate_dropout_mask(self, inputs, training=None):
+		if 0 < self.dropout < 1:
+			ones = K.ones_like(K.squeeze(inputs[:. 0:1, :], axis=1))
+
+			def dropped_inputs():
+				return K.dropout(ones, self.dropout)
+
+			self._dropout_mask = [K.in_train_phase(dropped_inputs, ones, training=training)
+									for _ in range(4)]
+		else:
+			self._dropout_mask = None
+
+	def _generate_recurrent_dropout_mask(self, inputs, training=None):
+		if 0 < self.recurrent_dropout < 1:
+			ones = K.ones_like(K.reshape(inputs[:, 0, 0], (-1, 1)))
+			ones = K.tile(ones, (1, self.units))
+
+			def dropped_inputs():
+				return K.dropout(ones, self.dropout)
+
+			self._recurrent_dropout_mask = [K.in_train_phase(dropped_inputs, ones, training=training)
+											for _ in range(4)]
+		else:
+			self._recurrent_dropout_mask = None
+
 class LSTM(RNN):
 	"""Long Short Term Memory Layer
 	Reference:
